@@ -1,0 +1,148 @@
+services:
+  db:
+    image: mariadb:11.4
+    container_name: nextcloud-db
+    restart: unless-stopped
+    command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW
+    volumes:
+      - db_data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    healthcheck:
+      test: [ "CMD-SHELL", "mariadb-admin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      internal:
+        aliases:
+          - db
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: nextcloud-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      internal:
+        aliases:
+          - redis
+
+  app:
+    image: nextcloud:${NEXTCLOUD_VERSION}
+    container_name: nextcloud-app
+    restart: unless-stopped
+    expose:
+      - "80"
+    volumes:
+      - nextcloud_html:/var/www/html
+      - nextcloud_apps:/var/www/html/custom_apps
+      - nextcloud_config:/var/www/html/config
+      - nextcloud_data:/var/www/html/data
+    environment:
+      MYSQL_HOST: db
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+
+      REDIS_HOST: redis
+      REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}
+
+      NEXTCLOUD_TRUSTED_DOMAINS: ${NEXTCLOUD_TRUSTED_DOMAINS}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES}
+      OVERWRITEPROTOCOL: https
+      OVERWRITEHOST: ${NEXTCLOUD_HOST}:${CADDY_HTTPS_PORT}
+      OVERWRITECLIURL: https://${NEXTCLOUD_HOST}:${CADDY_HTTPS_PORT}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      internal:
+        aliases:
+          - app
+
+  cron:
+    image: nextcloud:${NEXTCLOUD_VERSION}
+    container_name: nextcloud-cron
+    restart: unless-stopped
+    entrypoint: /cron.sh
+    volumes:
+      - nextcloud_html:/var/www/html
+      - nextcloud_apps:/var/www/html/custom_apps
+      - nextcloud_config:/var/www/html/config
+      - nextcloud_data:/var/www/html/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+
+  collabora:
+    image: collabora/code:latest
+    container_name: nextcloud-office
+    restart: unless-stopped
+    expose:
+      - "9980"
+    environment:
+      domain: ${COLLABORA_ALLOWED_DOMAIN}
+      username: ${COLLABORA_ADMIN_USER}
+      password: ${COLLABORA_ADMIN_PASSWORD}
+      extra_params: "--o:ssl.enable=false --o:ssl.termination=true"
+    shm_size: "${COLLABORA_SHM_SIZE}"
+    networks:
+      internal:
+        aliases:
+          - collabora
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: nextcloud-caddy
+    restart: unless-stopped
+    ports:
+      - "${CADDY_HTTPS_PORT}:443"
+    environment:
+      NEXTCLOUD_HOST: ${NEXTCLOUD_HOST}
+      COLLABORA_HOST: ${COLLABORA_HOST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_started
+      collabora:
+        condition: service_started
+    networks:
+      internal:
+        aliases:
+          - caddy
+
+volumes:
+  db_data:
+  nextcloud_html:
+  nextcloud_apps:
+  nextcloud_config:
+  nextcloud_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
