@@ -1,0 +1,16 @@
+{$NEXTCLOUD_HOST} {
+    tls internal
+    encode zstd gzip
+
+    redir /.well-known/carddav /remote.php/dav/ 301
+    redir /.well-known/caldav /remote.php/dav/ 301
+
+    reverse_proxy app:80
+}
+
+{$COLLABORA_HOST} {
+    tls internal
+    encode zstd gzip
+
+    reverse_proxy collabora:9980
+}
